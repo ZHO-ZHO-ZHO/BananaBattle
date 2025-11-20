@@ -1,0 +1,5 @@
+{
+  "name": "Banana Battle",
+  "description": "A retro-futuristic Archigram-style interface for comparing Gemini image generation models.",
+  "requestFramePermissions": []
+}

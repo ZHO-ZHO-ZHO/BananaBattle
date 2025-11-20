@@ -27,6 +27,42 @@ export const generateImage = async (
   }
 };
 
+/**
+ * Analyzes an image and generates a detailed, professional prompt description.
+ */
+export const generateImageDescription = async (base64Image: string): Promise<string> => {
+  try {
+    // Extract MimeType from Data URL
+    const mimeMatch = base64Image.match(/^data:(.*);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+    
+    // Remove data URL prefix
+    const base64Data = base64Image.split(',')[1];
+
+    const prompt = "Analyze this image and provide a professional, coherent image generation prompt. Describe the image including details, lighting, character features, facial proportions, expressions, materials, and style. Output ONLY the prompt description.";
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType,
+              data: base64Data
+            }
+          },
+          { text: prompt }
+        ]
+      }
+    });
+
+    return response.text || "Failed to analyze image.";
+  } catch (error: any) {
+    console.error("Reverse Prompt Error:", error);
+    throw new Error(error.message || "Failed to generate description from image");
+  }
+};
+
 const generateContentImage = async (model: string, prompt: string, images: string[]): Promise<string> => {
   try {
     const parts: any[] = [];
@@ -50,8 +86,15 @@ const generateContentImage = async (model: string, prompt: string, images: strin
       });
     }
 
-    // Add the text prompt
-    parts.push({ text: prompt });
+    // Add the text prompt, or a default one if images exist but prompt is empty
+    const finalPrompt = prompt.trim() || (images.length > 0 ? "Generate an image based on the provided visual references." : "");
+    
+    if (finalPrompt) {
+        parts.push({ text: finalPrompt });
+    } else {
+        // Should not happen due to UI checks, but technically required
+        throw new Error("Prompt is required");
+    }
 
     const response = await ai.models.generateContent({
       model: model,
@@ -87,6 +130,11 @@ const generateContentImage = async (model: string, prompt: string, images: strin
 
 const generateDedicatedImage = async (model: string, prompt: string): Promise<string> => {
   try {
+    // For Pro/Imagen, we require a prompt.
+    if (!prompt.trim()) {
+        throw new Error("Text prompt is required for Pro model");
+    }
+
     const response = await ai.models.generateImages({
       model: model,
       prompt: prompt,

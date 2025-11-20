@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { ArchigramPanel } from './components/ArchigramPanel';
 import { ImageDisplay } from './components/ImageDisplay';
-import { generateImage } from './services/genai';
+import { generateImage, generateImageDescription } from './services/genai';
 import { ImageResult, ModelType } from './types';
-import { Zap, Box, ArrowRight, Upload, X, Layers, FileText } from 'lucide-react';
+import { Zap, Box, ArrowRight, Upload, X, Layers, FileText, Wand2, Loader2 } from 'lucide-react';
 
 // --- Canvas Helpers ---
 
@@ -39,6 +39,7 @@ const wrapText = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
 const App: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [uploadedImages, setUploadedImages] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +114,30 @@ const App: React.FC = () => {
     setUploadedImages(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleUseAsInput = (imageUrl: string) => {
+    if (uploadedImages.length >= 5) {
+      alert("MAXIMUM CAPACITY REACHED (5 MODULES)");
+      return;
+    }
+    setUploadedImages(prev => [...prev, imageUrl]);
+  };
+
+  const handleReversePrompt = async () => {
+    if (uploadedImages.length === 0) return;
+    
+    setIsAnalyzing(true);
+    try {
+      // Analyze only the first image for reverse prompting
+      const description = await generateImageDescription(uploadedImages[0]);
+      setPrompt(description.trim());
+    } catch (error) {
+      console.error("Analysis failed", error);
+      alert("Failed to reverse prompt image.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const handleGenerate = useCallback(async () => {
     if (!prompt.trim() && uploadedImages.length === 0) return;
 
@@ -176,7 +201,11 @@ const App: React.FC = () => {
     const promptLines = wrapText(ctx, promptText, width - (padding * 2));
     const promptBlockHeight = (promptLines.length * 36) + 60; // line height + padding
 
-    const totalHeight = headerHeight + promptBlockHeight + imageHeight + 140; // + stats/labels/footer
+    // Measure Uploaded Images Height
+    const hasUploadedImages = uploadedImages.length > 0;
+    const uploadedImagesHeight = hasUploadedImages ? 160 : 0; // 120px images + 40px padding/label
+
+    const totalHeight = headerHeight + promptBlockHeight + uploadedImagesHeight + imageHeight + 140; // + stats/labels/footer
 
     canvas.width = width;
     canvas.height = totalHeight;
@@ -216,7 +245,7 @@ const App: React.FC = () => {
     const promptY = headerHeight;
     ctx.strokeStyle = '#111111';
     ctx.lineWidth = 4;
-    ctx.strokeRect(padding, promptY, width - padding * 2, promptBlockHeight);
+    ctx.strokeRect(padding, promptY, width - padding * 2, promptBlockHeight + uploadedImagesHeight);
     
     ctx.fillStyle = '#111111';
     ctx.fillRect(padding, promptY, 160, 30);
@@ -230,8 +259,50 @@ const App: React.FC = () => {
       ctx.fillText(line, padding + 20, promptY + 60 + (idx * 36));
     });
 
-    // Image Section
-    const imagesY = headerHeight + promptBlockHeight + 40;
+    // Uploaded Images Section (if any)
+    if (hasUploadedImages) {
+      const uploadedY = promptY + promptBlockHeight;
+      
+      ctx.fillStyle = '#111111';
+      ctx.fillRect(padding, uploadedY - 10, 160, 30);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 16px "Space Mono", monospace';
+      ctx.fillText("VISUAL_INPUT:", padding + 10, uploadedY + 10);
+
+      let thumbX = padding + 20;
+      const thumbY = uploadedY + 30;
+      const thumbSize = 100;
+
+      for (const imgSrc of uploadedImages) {
+        try {
+          const thumb = await loadImage(imgSrc);
+          // Draw Thumb Frame
+          ctx.strokeStyle = '#111111';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(thumbX, thumbY, thumbSize, thumbSize);
+          
+          // Draw Thumb Image (Cover fit)
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(thumbX, thumbY, thumbSize, thumbSize);
+          ctx.clip();
+          const scale = Math.max(thumbSize / thumb.width, thumbSize / thumb.height);
+          const w = thumb.width * scale;
+          const h = thumb.height * scale;
+          const x = thumbX + (thumbSize - w) / 2;
+          const y = thumbY + (thumbSize - h) / 2;
+          ctx.drawImage(thumb, x, y, w, h);
+          ctx.restore();
+
+          thumbX += thumbSize + 20;
+        } catch (e) {
+          console.error("Error loading thumb for report", e);
+        }
+      }
+    }
+
+    // Result Images Section
+    const imagesY = headerHeight + promptBlockHeight + uploadedImagesHeight + 40;
 
     const drawResultBox = async (
       imgUrl: string, 
@@ -398,29 +469,42 @@ const App: React.FC = () => {
                   <span className="font-mono text-[10px] opacity-60 text-archi-black">MAX 5 FILES</span>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-2 max-h-[120px] overflow-y-auto pr-1 custom-scrollbar">
-                  {uploadedImages.map((img, idx) => (
-                    <div key={idx} className="relative group aspect-square border-2 border-black bg-white">
-                        <img src={img} alt={`Upload ${idx}`} className="w-full h-full object-cover transition-all" />
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeImage(idx);
-                          }}
-                          className="absolute -top-1 -right-1 bg-archi-red text-white p-0.5 border border-black hover:scale-110"
-                        >
-                          <X size={12} />
-                        </button>
-                    </div>
-                  ))}
-                  {uploadedImages.length < 5 && (
-                    <div 
-                      onClick={() => fileInputRef.current?.click()}
-                      className="aspect-square border-2 border-dashed border-black flex items-center justify-center cursor-pointer hover:bg-white"
-                    >
-                      <span className="text-2xl font-sans text-archi-black">+</span>
-                    </div>
-                  )}
+                <div className="flex flex-col h-full">
+                  <div className="grid grid-cols-2 gap-2 max-h-[120px] overflow-y-auto pr-1 custom-scrollbar mb-2">
+                    {uploadedImages.map((img, idx) => (
+                      <div key={idx} className="relative group aspect-square border-2 border-black bg-white">
+                          <img src={img} alt={`Upload ${idx}`} className="w-full h-full object-cover transition-all" />
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeImage(idx);
+                            }}
+                            className="absolute -top-1 -right-1 bg-archi-red text-white p-0.5 border border-black hover:scale-110"
+                          >
+                            <X size={12} />
+                          </button>
+                      </div>
+                    ))}
+                    {uploadedImages.length < 5 && (
+                      <div 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="aspect-square border-2 border-dashed border-black flex items-center justify-center cursor-pointer hover:bg-white"
+                      >
+                        <span className="text-2xl font-sans text-archi-black">+</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Reverse Prompt Button */}
+                  <button 
+                    onClick={handleReversePrompt}
+                    disabled={isAnalyzing}
+                    className="mt-auto w-full bg-archi-black text-white font-mono text-xs py-2 flex items-center justify-center gap-2 hover:bg-archi-red transition-all border-2 border-transparent hover:border-black disabled:opacity-50 shadow-[2px_2px_0px_0px_#111] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px]"
+                    title="Analyze image and generate prompt"
+                  >
+                    {isAnalyzing ? <Loader2 className="animate-spin" size={14} /> : <Wand2 size={14} />}
+                    REVERSE PROMPT
+                  </button>
                 </div>
               )}
               
@@ -506,6 +590,7 @@ const App: React.FC = () => {
               result={resultA} 
               label="NANO" 
               color="red" 
+              onUseAsInput={handleUseAsInput}
             />
           </ArchigramPanel>
 
@@ -534,6 +619,7 @@ const App: React.FC = () => {
               result={resultB} 
               label="PRO" 
               color="blue" 
+              onUseAsInput={handleUseAsInput}
             />
           </ArchigramPanel>
           
